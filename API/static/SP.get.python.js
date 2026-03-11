@@ -1,1331 +1,683 @@
-(function(){ 
-  document.addEventListener('DOMContentLoaded', function(){
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SingPioneers Knowledge Graph Explorer</title>
 
-    /** Utility functions **/
-    let $ = selector => document.querySelector( selector );  // to select HTML elements
+  <script src="cytoscape.min.js"></script>
+  <script src="cola.min.js"></script>
+  <script src="cytoscape-cola.js"></script>
+  <script src="layout-base.js"></script>
+  <script src="cose-base.js"></script>
+  <script src="cytoscape-fcose.js"></script>
+  <script src="weaver.min.js"></script>
+  <script src="cytoscape-spread.js"></script>
+  <script src="SP.get.python.js"></script>
 
-    let tryPromise = fn => Promise.resolve().then( fn );  // to start executing a chain of functions
-
-    let toJson = obj => obj.json();  // Convert json file content to javascript object
-	
-    /* Control size of display canvas. And resize when browser window change size */	
-    let resizeCanvas = () => {    // get current browser window size, and fit canvas size to it
-      let w = window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth
-      let h = window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight
-      let canvasHeight = '400px'  // minimum height
-      let canvasWidth = '600px'   // minimum width
-      let cyHeight = '360px'
-      if  (h > 400) {canvasHeight = h + 'px'; cyHeight = (h-60) + 'px'}
-      if  (w-160 > 600) {canvasWidth = (w-262) + 'px' }
-      // console.log('canvasHeight: ', canvasHeight)
-      // console.log('canvasWidth: ', canvasWidth)
-      $('#canvasWithMenu').style.height = canvasHeight
-      $('#canvasWithMenu').style.width = canvasWidth
-      $('#canvas-menu').style.width = canvasWidth
-      $('#cy').style.height = cyHeight
-      $('#cy').style.width = canvasWidth
+  <style>
+    :root{
+      --bg:#f6f7fb;
+      --panel:#ffffff;
+      --sidebar:#eef2ff;
+      --primary:#5b2c83;
+      --primary-soft:#efe5ff;
+      --accent:#7c3aed;
+      --text:#1f2937;
+      --muted:#6b7280;
+      --border:#d8dce8;
+      --shadow:0 8px 24px rgba(43, 54, 86, 0.10);
+      --radius:14px;
     }
-    resizeCanvas()   // set initial canvas size
-    window.addEventListener("resize", resizeCanvas)   // adjust canvas size when browser window is resized
-    
-    // Adjust canvas width when entering or exiting fullscreen mode
-    let fullscreen_resize = () => { 
-      if (document.fullscreenElement) {   // in fullscreen mode 
-        $('#canvasWithMenu').style.width = '100%'
-        $('#canvas-menu').style.width = '100%'
-        $('#cy').style.width = '100%'
-      } else resizeCanvas()   // else if exiting fullscreen mode
+
+    *{
+      box-sizing:border-box;
     }
-    // add event listeners for various web browsers
-    document.addEventListener('fullscreenchange', fullscreen_resize)
-    document.addEventListener('mozfullscreenchange', fullscreen_resize)  // for firefox
-    document.addEventListener('webkitfullscreenchange', fullscreen_resize)  // for Chrome, Safari and Opera
-    document.addEventListener('msfullscreenchange', fullscreen_resize)  // for IE, MS Edge
 
+    body{
+      margin:0;
+      font-family:Arial, Helvetica, sans-serif;
+      background:var(--bg);
+      color:var(--text);
+    }
 
-    let cy;  // cytoscape display canvas
+    header{
+      background:linear-gradient(135deg, #4c1d95, #7c3aed);
+      color:white;
+      padding:20px 28px;
+      box-shadow:0 4px 18px rgba(76, 29, 149, 0.25);
+    }
 
-    // Close graph popup info box, when user double-clicks on it
-    $("#graph-popup1-close").addEventListener('click', function() { $("#graph-popup1").style.display = "none" });
-    $("#graph-popup1").addEventListener('dblclick', function() { $("#graph-popup1").style.display = "none" });
+    header h1{
+      margin:0;
+      font-size:28px;
+      font-weight:700;
+    }
 
+    header p{
+      margin:8px 0 0 0;
+      font-size:14px;
+      opacity:0.95;
+      max-width:900px;
+      line-height:1.5;
+    }
 
+    .page-wrap{
+      display:flex;
+      min-height:calc(100vh - 98px);
+    }
 
-    /** Make the popup info box draggable **/
-     
-    dragElement(document.getElementById("graph-popup1"), document.getElementById("graph-popup1-pin") );
+    .main-leftmenu{
+      width:290px;
+      min-width:290px;
+      background:var(--sidebar);
+      border-right:1px solid var(--border);
+      padding:20px 16px 28px 16px;
+      overflow-y:auto;
+    }
 
-    // Alternatively, if user erroneously clicks on the pin icon in help msg, click on the correct pin for user
-    $('#graph-popup1-pin2').addEventListener('click', function() { $('#graph-popup1-pin').click() })
+    .main-panel{
+      flex:1;
+      padding:22px;
+      min-width:0;
+    }
 
-    function dragElement(elmnt, pinElmnt) {
+    .panel-card{
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+      padding:18px;
+      margin-bottom:18px;
+    }
 
-      var pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-      elmnt.onmousedown = dragMouseDown;
-      elmnt.ontouchstart = dragMouseDown;  // for touch screens
+    .sidebar-title{
+      font-size:22px;
+      margin:0 0 4px 0;
+      color:var(--primary);
+    }
 
-      // The pin element toggles the draggable function on and off 
-      pinElmnt.onclick = toggle;
-      // pinElmnt.ontouchstart = toggle;
-      
-      function toggle () {
-        $('#graph-popup1-pin').classList.toggle("pin-push") 
-        if (elmnt.onmousedown != null) { elmnt.onmousedown = null; elmnt.ontouchstart == null }      
-        else {
-          elmnt.onmousedown = dragMouseDown;
-          elmnt.ontouchstart = dragMouseDown;  // for touch screens                    
-        }  
+    .sidebar-subtitle{
+      color:var(--muted);
+      font-size:13px;
+      margin-bottom:14px;
+      line-height:1.5;
+    }
+
+    .section-note{
+      font-size:12px;
+      color:var(--muted);
+      line-height:1.5;
+      margin:6px 0 14px 0;
+    }
+
+    button{
+      border:1px solid var(--border);
+      background:#fff;
+      color:var(--text);
+      padding:9px 12px;
+      border-radius:10px;
+      cursor:pointer;
+      transition:all 0.2s ease;
+      font-size:14px;
+    }
+
+    button:hover{
+      transform:translateY(-1px);
+      box-shadow:0 4px 12px rgba(0,0,0,0.08);
+    }
+
+    .primary-btn{
+      background:var(--primary);
+      color:#fff;
+      border-color:var(--primary);
+    }
+
+    .primary-btn:hover{
+      background:#4a2370;
+    }
+
+    .light-btn{
+      background:var(--primary-soft);
+      color:var(--primary);
+      border-color:#d9c3ff;
+    }
+
+    select, input[type="text"]{
+      width:100%;
+      padding:10px 12px;
+      border:1px solid var(--border);
+      border-radius:10px;
+      background:white;
+      font-size:14px;
+      margin-top:6px;
+    }
+
+    label{
+      font-size:14px;
+    }
+
+    .checkbox-grid{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:6px 10px;
+      margin-top:10px;
+      margin-bottom:14px;
+    }
+
+    .checkbox-grid label{
+      display:flex;
+      align-items:center;
+      gap:6px;
+      font-size:13px;
+      color:#374151;
+    }
+
+    .accordion{
+      width:100%;
+      text-align:left;
+      font-weight:700;
+      color:var(--primary);
+      background:#fff;
+      border:1px solid var(--border);
+      margin-top:12px;
+      border-radius:12px;
+      box-shadow:0 3px 10px rgba(0,0,0,0.04);
+      position:relative;
+    }
+
+    .accordion:after{
+      content:'+';
+      float:right;
+      color:var(--muted);
+      font-size:16px;
+      font-weight:bold;
+    }
+
+    .accordion.active:after{
+      content:'–';
+    }
+
+    .accordion.active,
+    .accordion:hover{
+      background:#f7f0ff;
+    }
+
+    .panel{
+      max-height:0;
+      overflow:auto;
+      transition:max-height 0.25s ease;
+      padding:0 4px;
+    }
+
+    .step-title{
+      margin:14px 0 6px 0;
+      font-size:14px;
+      font-weight:700;
+      color:#374151;
+    }
+
+    .button-stack{
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+      margin-top:10px;
+      margin-bottom:10px;
+    }
+
+    .button-stack button{
+      width:100%;
+      text-align:left;
+    }
+
+    .function-box{
+      background:#fff;
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:12px;
+      margin-top:12px;
+    }
+
+    .function-box h4{
+      margin:0 0 8px 0;
+      color:var(--primary);
+      font-size:15px;
+    }
+
+    .topbar-card{
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+      padding:18px 20px;
+      margin-bottom:18px;
+    }
+
+    .topbar-card h2{
+      margin:0 0 8px 0;
+      color:var(--primary);
+      font-size:24px;
+    }
+
+    .topbar-card p{
+      margin:0;
+      color:var(--muted);
+      line-height:1.6;
+      font-size:14px;
+    }
+
+    #canvasWithMenu{
+      display:block;
+      width:100%;
+      min-height:760px;
+    }
+
+    #canvas-menu{
+      min-height:48px;
+      background:var(--primary-soft);
+      border:1px solid #d9c3ff;
+      border-radius:12px 12px 0 0;
+      padding:10px;
+      display:block;
+      font-size:14px;
+      line-height:1.8;
+    }
+
+    #canvas-menu b{
+      color:var(--primary);
+    }
+
+    #canvas-menu button{
+      margin:2px 3px;
+      background:white;
+    }
+
+    #cy{
+      width:100%;
+      min-height:640px;
+      border:1px solid #d9c3ff;
+      border-top:none;
+      border-radius:0 0 12px 12px;
+      background:#fcfaff;
+      box-shadow:0 8px 20px rgba(124, 58, 237, 0.08);
+    }
+
+    #table1{
+      margin-top:18px;
+      background:#fff;
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:14px;
+      box-shadow:var(--shadow);
+      overflow:auto;
+    }
+
+    #query2{
+      margin-top:24px;
+      color:var(--primary);
+    }
+
+    .modal2{
+      display:none;
+      position:fixed;
+      z-index:10;
+      right:10px;
+      top:20px;
+      width:340px;
+      max-height:650px;
+      resize:both;
+      overflow:auto;
+      padding:10px;
+    }
+
+    .modal2-content{
+      background-color:#f6efff;
+      text-align:left;
+      width:95%;
+      max-height:610px;
+      box-shadow:0 8px 24px rgba(124, 58, 237, 0.18);
+      color:#3d2c5a;
+      line-height:1.4;
+      font-family:"Times New Roman", Times, serif;
+      font-weight:normal;
+      padding:12px;
+      overflow:auto;
+      border-radius:12px;
+      border:1px solid #dfc7ff;
+    }
+
+    .close, .pin{
+      color:#666;
+      float:right;
+      font-size:24px;
+      font-weight:bold;
+    }
+
+    .pin-push{
+      border-style:inset;
+      border-width:2px;
+      border-color:#e8ddff;
+      background-color:#d9c8ff;
+    }
+
+    .close:hover, .close:focus, .pin:hover, .pin:focus{
+      color:black;
+      text-decoration:none;
+      cursor:pointer;
+    }
+
+    .sidepanel{
+      position:fixed;
+      z-index:9;
+      height:420px;
+      width:290px;
+      top:170px;
+      right:-272px;
+      resize:vertical;
+      overflow:auto;
+      background:#f6fbef;
+      color:#32422f;
+      text-align:left;
+      line-height:1.4;
+      font-family:"Times New Roman", Times, serif;
+      padding:0;
+      transition:0.5s;
+      border:1px solid #dbe7ce;
+      border-radius:12px 0 0 12px;
+      box-shadow:var(--shadow);
+    }
+
+    .sidepanel:hover{
+      right:0;
+    }
+
+    .sidepanel-pin, .sidepanel-pin2{
+      right:0;
+    }
+
+    .transition-delay{
+      transition-delay:0.5s;
+    }
+
+    hr{
+      border:none;
+      border-top:1px solid var(--border);
+      margin:16px 0;
+    }
+
+    small{
+      color:var(--muted);
+    }
+
+    @media (max-width: 1100px){
+      .page-wrap{
+        flex-direction:column;
       }
 
-      function dragMouseDown(e) {
-        e = e || window.event;
-        // e.preventDefault();
-        
-        if ((e.clientX)&&(e.clientY)) {
-          pos3 = e.clientX;
-          pos4 = e.clientY;
-          document.onmouseup = closeDragElement;
-          // call a function whenever the cursor moves:
-          document.onmousemove = elementDrag_mouse;
-
-        } else if (e.targetTouches) {
-          pos3 = e.targetTouches[0].clientX;
-          pos4 = e.targetTouches[0].clientY;
-          document.ontouchend = closeDragElement;
-          // call a function whenever the cursor moves:
-          document.ontouchmove = elementDrag_touch;
-        }
+      .main-leftmenu{
+        width:100%;
+        min-width:100%;
+        border-right:none;
+        border-bottom:1px solid var(--border);
       }
 
-      function elementDrag_mouse(e) {
-        e = e || window.event;
-        // e.preventDefault();
-        // calculate the new cursor position:
-        pos1 = pos3 - e.clientX;
-        pos2 = pos4 - e.clientY;
-        pos3 = e.clientX;
-        pos4 = e.clientY;
-        // set the element's new position:
-        elmnt.style.top = (elmnt.offsetTop - pos2) + "px";
-        elmnt.style.left = (elmnt.offsetLeft - pos1) + "px";
-      }
-
-      function elementDrag_touch(e) {
-        e = e || window.event;
-        // e.preventDefault();
-        // calculate the new cursor position:
-        pos1 = pos3 - e.targetTouches[0].clientX;
-        pos2 = pos4 - e.targetTouches[0].clientY;
-        pos3 = e.targetTouches[0].clientX;
-        pos4 = e.targetTouches[0].clientY;
-        // set the element's new position:
-        elmnt.style.top = (elmnt.offsetTop - pos2) + "px";
-        elmnt.style.left = (elmnt.offsetLeft - pos1) + "px";
-      }
-
-      function closeDragElement() {
-        // stop moving when mouse button is released:
-        document.onmouseup = null;
-        document.onmousemove = null;
-        document.ontouchend = null;
-        document.ontouchmove = null;
+      .sidepanel{
+        display:none;
       }
     }
-
-
-    /** Script for collapsible menu on left panel **/
-    let acc = document.getElementsByClassName("accordion")
-    let i;
-    for (i = 0; i < acc.length; i++) {
-      acc[i].addEventListener("click", function() {
-        /* Toggle between adding and removing the "active" class,
-        to highlight the button that controls the panel */
-        this.classList.toggle("active");
-
-        /* Toggle between hiding and showing the active panel */
-        let panel = this.nextElementSibling;
-        if (panel.style.maxHeight) {
-          panel.style.maxHeight = null;
-        } else {
-          panel.style.maxHeight = panel.scrollHeight + "px";
-        }
-      })
-    }
-
- 
-    
-  /** Listeners & Actions attached to HTML elements **/
-  
-  // A Pioneer is selected from dropdown list
-  // Process the change event as if the checkbox_button is clicked
-  $('#Pioneer').addEventListener('change', function() { 
-    const relation_list = ['reference'];   // including biography_of
-    if ($('#achievement').checked == true){relation_list.push('achievement')}
-    if ($('#art').checked == true){relation_list.push('art')}
-    if ($('#award').checked == true){relation_list.push('award')}
-    if ($('#business').checked == true){relation_list.push('business')}
-    if ($('#creator_of').checked == true){relation_list.push('creator_of')}
-    if ($('#football').checked == true){relation_list.push('football')}
-    if ($('#interpersonal').checked == true){relation_list.push('interpersonal')}
-    if ($('#kinship').checked == true){relation_list.push('kinship')}
-    if ($('#leisure').checked == true){relation_list.push('leisure')}
-    if ($('#movie').checked == true){relation_list.push('movie')}
-    if ($('#music').checked == true){relation_list.push('music')}
-    if ($('#official_of').checked == true){relation_list.push('official_of')}
-    if ($('#organization').checked == true){relation_list.push('organization')}
-    if ($('#performance').checked == true){relation_list.push('performance')}
-    if ($('#philanthropy').checked == true){relation_list.push('philanthropy')}
-    if ($('#place').checked == true){relation_list.push('place')}
-    if ($('#school').checked == true){relation_list.push('school')}
-    if ($('#sports').checked == true){relation_list.push('sports')}
-    if ($('#URL').checked == true){relation_list.push('URL')}
-
-
-    // Display the person node first, in case the next query has null result
-    retrieve($('#Pioneer').value, '_', '1b', 'query');  
-    retrieve($('#Pioneer').value, relation_list, '2a', 'query');  // 2 query parameters
-  });
-
-
-  // Retrieve selected Pioneer with selected relationships (in checkbox)
-  $('#checkbox_submit').addEventListener('click', function() { 
-    const relation_list = ['reference'];   // including biography_of
-    if ($('#achievement').checked == true){relation_list.push('achievement')}
-    if ($('#art').checked == true){relation_list.push('art')}
-    if ($('#award').checked == true){relation_list.push('award')}
-    if ($('#business').checked == true){relation_list.push('business')}
-    if ($('#creator_of').checked == true){relation_list.push('creator_of')}
-    if ($('#football').checked == true){relation_list.push('football')}
-    if ($('#interpersonal').checked == true){relation_list.push('interpersonal')}
-    if ($('#kinship').checked == true){relation_list.push('kinship')}
-    if ($('#leisure').checked == true){relation_list.push('leisure')}
-    if ($('#movie').checked == true){relation_list.push('movie')}
-    if ($('#music').checked == true){relation_list.push('music')}
-    if ($('#official_of').checked == true){relation_list.push('official_of')}
-    if ($('#organization').checked == true){relation_list.push('organization')}
-    if ($('#performance').checked == true){relation_list.push('performance')}
-    if ($('#philanthropy').checked == true){relation_list.push('philanthropy')}
-    if ($('#place').checked == true){relation_list.push('place')}
-    if ($('#school').checked == true){relation_list.push('school')}
-    if ($('#sports').checked == true){relation_list.push('sports')}
-    if ($('#URL').checked == true){relation_list.push('URL')}
-
-  
-    // Display the person node first, in case the next query has null result
-    retrieve($('#Pioneer').value, '_', '1b', 'query');  
-    retrieve($('#Pioneer').value, relation_list, '2a', 'query');  // 2 query parameters, query2a processes parameter2 as a list
-  });
-
-
-  // Social network buttons
-  $('#network_kin').addEventListener('click', function() { 
-    retrieve('Inter-personal network', ['kinship', 'interpersonal'], 'relationList','query') })
-
-  $('#network_school').addEventListener('click', function() { 
-    retrieve('School network', ['school'], 'relationList','query') })
-
-  $('#network_business').addEventListener('click', function() { 
-    retrieve('Business network', ['business'], 'relationList','query') 
-  });
-
-  $('#network_community').addEventListener('click', function() { 
-    retrieve('Community network', ['organization', 'official_of'], 'relationList', 'query') 
-    retrieve('Community network', ['member_of'], 'rel_typeList', 'query')     
-  });
-
-  $('#network_culture').addEventListener('click', function() { 
-    retrieve('Culture network', ['music', 'movie', 'creator_of', 'performance', 'art'], 'relationList','query') 
-    retrieve('Culture network', ['has_violin_teacher', 'has_art_teacher'], 'rel_typeList', 'query')     
- 
-  });
-
-  $('#network_sports').addEventListener('click', function() { 
-    retrieve('Sports&leisure network', ['sports', 'football', 'leisure'], 'relationList','query') 
-    retrieve('Sports&leisure network', ['sport_master_of', 'team_mate_of', 'talent_scouted_by', 'coached_by', 'coach_of', 'national_coach_of'], 'rel_typeList', 'query')     
-  });
-
-
-  // Entity buttons
-  // Group 1
-  $('#entity_school').addEventListener('click', function() { 
-    retrieve('Schools', ['Educational_Organization', 'Primary_School', 'Secondary_School', 'Tertiary_Institution', 'Teacher'], 'node_typeList', 'query') });
-
-  $('#entity_business').addEventListener('click', function() { 
-    retrieve('Business entities', ['Shipping', 'Company', 'Local_Company', 'Multinational', 'Business', 'Industry', 'Businessman'], 'node_typeList','query')});
-
-  $('#entity_culture').addEventListener('click', function() { 
-    retrieve('Cultural & artistic entities', ['Orchestra', 'Performing_Group', 'Ten_Men_Grp', 'Cultural', 'Artist', 'Composer', 'Musician', 'Orchestra_Conductor', 'Painter', 'Performer', 'Singer'], 'node_typeList','query') });
-
-  $('#entity_sports').addEventListener('click', function() { 
-    retrieve('Sports & Hobbies', ['Interest'], 'node_labelList', 'query') 
-    retrieve('Sports & Hobbies', ['Football', 'Sports', 'Athlete', 'Footballer'], 'node_typeList', 'query') });
-
-  $('#entity_community').addEventListener('click', function() { 
-    retrieve('Community, Social, Political', ['Issue'], 'node_labelList', 'query') 
-    retrieve('Community, Social, Political', ['Newspaper', 'Information_Communication', 'Politics', 'Philanthropy', 'Social', 'Association', 'Government_Agency', 'NGO', 'Religious_Organization', 'Government_official', 'Librarian'], 'node_typeList','query') });
-
-  $('#entity_org').addEventListener('click', function() { 
-    retrieve('All organizations', ['Organization'], 'node_labelList','query') });
-
-
-  // Group 2
-  $('#entity_movie').addEventListener('click', function() { 
-    retrieve('Movies', ['Film_industry', 'Movie', 'Actor'], 'node_typeList','query') });
-
-  $('#entity_music').addEventListener('click', function() { 
-    retrieve('Music', ['Music', 'Anthem', 'Song', 'Symphony', 'Musician', 'Orchestra_Conductor', 'Performer', 'Singer', 'Composer', 'Violinist'], 'node_typeList','query') });
-
-  $('#entity_art').addEventListener('click', function() { 
-    retrieve('Art & Paintings', ['Art', 'Painting', 'Calligraphy', 'Artist', 'Painter'], 'node_typeList','query') });
-
-  $('#entity_creative').addEventListener('click', function() { 
-    retrieve('All creative works', ['CreativeWork'], 'node_labelList', 'query') });
-
-
-  //Group 3
-  $('#entity_event').addEventListener('click', function() { 
-    retrieve('Events', ['Event'], 'node_labelList', 'query') });
-
-  $('#entity_law').addEventListener('click', function() { 
-    retrieve('Laws & Issues', ['Legal_Matter', 'Issue'], 'node_labelList', 'query') 
-    retrieve('Laws & Issues', ['Lawyer', 'Government_official'], 'node_typeList','query') });
-
-  $('#entity_place').addEventListener('click', function() { 
-    retrieve('Places', ['Place'], 'node_labelList', 'query') });
-
-  $('#entity_building').addEventListener('click', function() { 
-    retrieve('Buildings', ['Architecture', 'Project', 'Architect'], 'node_labelList', 'query') });
-
-  $('#entity_award').addEventListener('click', function() { 
-    retrieve('Awards & Recognition', ['Award'], 'node_labelList', 'query') });
-
-
-  // Special topics buttons
-  $('#special_interethnic').addEventListener('click', function() { 
-    retrieve('Inter-ethnic relations', '_', 'interethnic', 'query') });
-
-  $('#special_interethnic_table').addEventListener('click', function() {   // list in table
-    retrieve2('Inter-ethnic relations', '_', 'interethnic_table', 'query2') 
-        $('#query2').scrollIntoView() });
-
-
-  $('#special_multi').addEventListener('click', function() { 
-    retrieve('Multiple bonds', '_', 'multi', 'query') 
-    retrieve('Multiple bonds', '_', 'multi2', 'query') });
-
-
-  $('#special_triad').addEventListener('click', function() { 
-    retrieve('Triadic relation structure - may take 15 sec. to process', '_', 'triad', 'query') });
-
-  $('#special_triad_table').addEventListener('click', function() {   // list in table
-    retrieve2('Triadic relation structure', '_', 'triad_table', 'query2')
-    $('#query2').scrollIntoView() });
-
-
-  // Relation path buttons
-  // Search user keyword to populate dropdown menu
-  $('#button-keywordA').addEventListener('click', function() { 
-    searchNode ($('#keywordA').value, 'entityA') })
-  $('#button-keywordB').addEventListener('click', function() { 
-    searchNode ($('#keywordB').value, 'entityB') })
-
-  $('#button-path').addEventListener('click', function() { 
-    retrieve($('#entityA').value, $('#entityB').value, 'path','query') })
-
-  $('#button-entityA').addEventListener('click', function() { 
-    retrieve($('#entityA').value, '_', '0','query') })
-
-
-
-  /** Retrieve list of SingPioneers & construct drop-down menu on left panel **/
-  // create a session for neo4j driver
-  /* For later
-  const session_init = driver.session({ defaultAccessMode: neo4j.session.READ })
-  try {
-    const result = await session_init.readTransaction(tx =>
-      tx.run(
-        //  'MATCH (n:MusicalWork) RETURN n.id'
-        queryText, { param: parameter }
-      )
-    )
-    // console.log(result.records);
-    // construct drop-down menu
-    let menu_txt = '<option value="Zubir_Said">Select SingPioneer</option>'
-    for (x in result.records) {
-       menu_txt += `<option value="${result.records[x]._fields[0].properties.id}">${result.records[x]._fields[0].properties.label}</option>`
-    }
-    // Display drop-down menu
-    document.getElementById("music").innerHTML = menu_txt;
-    // document.getElementById("letters").innerHTML = menu_txt;
-    // document.getElementById("commentary").innerHTML = menu_txt;
-  } catch (error) {
-    console.log(`unable to execute initial query for dropdown list: ${error}`)
-  } finally {
-    session_init.close()
-  }
-   */
-
-
- 
-  /** MAIN FUNCTION **/ 
-  // Fetch function submits query to server API (middleware) using GET method, and retrieves json result
-  // Display query parameter in element ID 'query'
-  // Runs cytoscape visualization     **/
-  
-  async function retrieve(parameter1, parameter2, queryID, elementID_query) {
-
-    // Display TOPIC (query keyword) as page header
-    document.getElementById(elementID_query).innerHTML = parameter1.replace(/_/g, ' ')
-
-    // API_domain = 'https://km6321.as.r.appspot.com'
-    API_domain = window.location.origin // for testing on laptop
-    
-    API_router = 'SPget'
-    API_queryID = queryID
-    API_param1 = encodeURIComponent(parameter1)
-    API_param2 = encodeURIComponent(parameter2)
-    API_string = `${API_domain}/${API_router}/${API_queryID}/${API_param1}/${API_param2}`
-    // example API_string: https://???.as.r.appspot.com/SPget/0/Zubir_Said/_
-
-
-    fetch(API_string, {mode: "cors", method: "GET"})   // FETCH FROM API
-      .then(response => { if (!response.ok) {throw new Error("Server API didn't respond")}
-                          return response.json()
-       })
-      .then(json_value => {   
-        console.log(json_value)
-      
-        // Check that 1 or more records are retrieved
-        if (json_value.length == 0) {     
-          document.getElementById(elementID_query).innerHTML = document.getElementById(elementID_query).innerHTML + '<br/><span style="color: hsl(330, 100%, 50%); text-shadow: none">NO MATCH FOUND</span>'
-
-        } else { 
-          json2graph(json_value)    // add search results to graph
-        }
-
-        if (queryID === 'keyword') { 
-           cy.nodes('*').unlock()   // unlock all nodes
-           cy.layout( layouts['concentric'] ).run()
-        } else if (queryID === '0') {  
-           // don't unlock nodes
-           cy.layout( layouts['cola'] ).run()    // run default graph layout
-        } else {   
-           cy.nodes('*').unlock()   // unlock all nodes
-           cy.layout( layouts['fcose'] ).run()   // run fcose for initial layout, then cola for adjustment
-           cy.reset()
-           cy.layout( layouts['cola'] ).run()    // run default graph layout
-        }
-       })
-      .catch(error => {console.error('Problem with the fetch operation from server API', error) })
-
-  }
-
-
-  /** 2nd version of retrieve function to display result in table1 element **/
-  async function retrieve2(parameter1, parameter2, queryID, elementID_query) {
-
-    // Display TOPIC (query keyword) as page header
-    document.getElementById(elementID_query).innerHTML = 'Result table: ' + parameter1.replace(/_/g, ' ')
-    $("#table1").innerHTML = 'Retrieving result ... may take 15 sec. <br/> <br/> <br/> <br/> <br/> <br/>';
-
-    // API_domain = 'https://km6321.as.r.appspot.com'
-    API_domain = 'http://localhost:8080'  // For testing on laptop
-    
-    API_router = 'SPget'
-    API_queryID = queryID
-    API_param1 = encodeURIComponent(parameter1)
-    API_param2 = encodeURIComponent(parameter2)
-    API_string = `${API_domain}/${API_router}/${API_queryID}/${API_param1}/${API_param2}`
-
-
-    fetch(API_string)
-      .then(response => { if (!response.ok) {throw new Error("Server API didn't respond")}
-                          return response.json()
-       })
-      .then(records => { 
-        console.log(records)
-        
-          // Create table display
-        let txt = "<table style='border-spacing: 2px;'><tr>"
-        
-          // Create table header
-          for (y of Object.keys(records[0]) ) {  // Process each field in record
-                txt += "<th style='background-color:hsl(0,20%,80%)'>" + y + "</th>"  
-          }
-          txt += "</tr>"  // close header row
-            
-        // display records in table rows
-        for (x in records) {
-            txt += "<tr>"   // open the table row          
-                for (y of Object.values(records[x]) ) {  // Process each field in record
-                  txt += "<td>" + y + "</td>"  
-                }
-              txt += "</tr>"  // close the table row
-        }
-        txt += "</table>" 
-
-        // Display table in result element
-        $("#table1").innerHTML = txt;
-        
-       })
-      .catch(error => {console.error('Problem with the fetch operation from server API', error) })
-
-  }
-
-
-
-  /** Carry out keyword search in node labels */
-  async function searchNode (keyword, dropdownList) {  // dropdownList is either entityA or entityB
-
-    // API_domain = 'https://km6321.as.r.appspot.com'
-    API_domain = 'http://localhost:8080'  // for testing on laptop
-
-    API_router = 'SPget'
-    API_queryID = 'searchKeyword'
-    API_param1 = '_'
-    API_param2 = encodeURIComponent(keyword)
-    API_string = `${API_domain}/${API_router}/${API_queryID}/${API_param1}/${API_param2}`
-
-
-    fetch(API_string)
-      .then(response => { if (!response.ok) {throw new Error("Server API didn't respond")}
-                          return response.json()
-       })
-      .then(records => { 
-        console.log(records);    
-        // construct drop-down menu
-        let menu_txt = '<option value="">Select</option>'
-        for (x of records) {
-           menu_txt += `<option value="${x['id']}">${x['label']}</option>`
-        }
-        // Display drop-down menu
-        document.getElementById(dropdownList).innerHTML = menu_txt;
-        
-       })
-      .catch(error => {console.error('Problem with the fetch operation from server API', error) })
-
-  }
-  
-
-
-  /** Process a node from Neo4j json result. Create cytoscape node, copy over properties */
-  /** Called by json2graph */
-  let process_node = node => {
-
-    // Check whether node exists in the graph
-    if (cy.$id(node.element_id).length == 0) {
-        
-      // create cytoscape node. Add mandatory fields
-      cy.add({ data: {
-        id: node.element_id,        
-        supertype: node.supertype[0],
-        id2: node.id,
-        /*
-        type: node.type,
-        label: node.label,
-        */
-      }})
-    }
-
-    // Add node type to nodeTypeRegistry array if not already exists
-    if (!nodeTypeRegistry.includes(node.type)) {
-        nodeTypeRegistry.push(node.type) 
-    }
-
-    cy_ele = cy.$id(node.element_id)  // retrieve newly created node to add more fields
-    delete node.element_id            // element_id already entered
-    delete node.id 
-    delete node.supertype
-    cy_ele.data( node )   // Update with the rest of the properties
-
-  }      
-
-
-  /** Process a relation from Neo4j json result, create cytoscape edge, transfer properties */
-  let process_relation = relation => {
-
-    // Check whether relation exists in the graph
-    if (cy.$id(relation.element_id).length == 0) {
-
-      // Add edge to graph if not already exists
-      cy.add({ data: {
-        id: relation.element_id,
-        source: relation.start_node,
-        target: relation.end_node,
-        /*
-        supertype: relation.supertype,
-        type: relation.type,
-        */
-      }})
-    }
-
-    // Add relation type to edgeTypeRegistry array if not already exists
-    if (!edgeTypeRegistry.includes(relation.type)) {
-        edgeTypeRegistry.push(relation.type) 
-    }
-
-    // retrieve newly created edge to add more fields
-    cy_ele = cy.$id(relation.element_id)
-    delete relation.element_id            // element_id already entered
-    delete relation.start_node
-    delete relation.end_node
-    cy_ele.data( relation )      // Update with the rest of the properties
-
-  }     
-
-
-  /** Add Neo4j result records to Cytoscape graph */
-  let json2graph = records => {
-
-    let z_obj;      // to store properties[z] in JSON file from neo4j
-    let cy_ele;     // to store newly created graph element 
-
-    // restore nodes and edges previously removed from graph
-    if (!node_edge_removed.empty()) node_edge_removed.restore()
-        
-    for (x of records) {  // Each record is either a node or a relation. Process all the nodes first
-      if (typeof x.start_node === 'undefined') { process_node(x) }       // record is a Node
-    }
-
-    for (x of records) {  // Process all the relations.
-      if (typeof x.start_node !== 'undefined') { process_relation(x) }    // record is a relation
-    }
-
-    toolboxFilter_createCheckboxes(nodeTypeRegistry, edgeTypeRegistry)
-    // console.log('num nodes:',cy.nodes().length)
-    // console.log('num edges:',cy.edges().length)
-    if (cy.nodes().length > 50) {    // if big graph, open sidepanel and suggest applying filter
-      $('#panel-filter-help').innerHTML = `<br/>Graph has ${cy.nodes().length} nodes. Consider applying a filter`
-      $('#panel-filter-help').style.visibility = 'visible'
-      $('#sidepanel1').classList.add("sidepanel-pin","transition-delay")  // open sidepanel
-    } else {
-      $('#panel-filter-help').innerHTML = ''
-      $('#panel-filter-help').style.visibility = 'hidden'
-      $('#sidepanel1').classList.remove("sidepanel-pin","transition-delay")  // close sidepanel
-      
-    }
-  }
- 
- 
-  cy = cytoscape({   // Create cytoscape object. Original method, without creating function
-  // let create_cytoscape = () => cytoscape({      // a function to create cytoscape object. The clear_canvas function destroys the current cytoscape object. This function is used to re-create cytoscape object
-    
-    container: $('#cy'),
-    minZoom: 0.5,
-    maxZoom: 4,
-    
-    elements: [ // list of graph elements to start with
-    ],
-
-    style: [ // the stylesheet for the graph
-      {
-        selector : "node",
-        style : {
-          "label" : "data(label)",
-          "text-wrap" : "wrap",
-          "text-max-width" : "180px",
-          "background-color" : "hsl(240,80%,90%)",
-          "border-width" : 0.0,
-          "height" : 30.0,
-          "shape" : "ellipse",
-          "font-size" : 12,
-          "color" : "hsl(240,80%,20%)",
-          "text-opacity" : 1.0,
-          "text-valign" : "center",
-          "text-halign" : "center",
-          "font-family" : "Tahoma, Arial, sans-serif",
-          "font-weight" : "normal",
-          "border-opacity" : 0.0,
-          "border-color" : "hsl(0,0%,100%)",
-          "width" : 50.0,
-          "background-opacity" : 1.0,
-          "content" : "data(label)"
-      }}, 
-      {
-        selector : "edge",
-        style : {
-          "label" : "data(type)",
-          "text-wrap" : "wrap",
-          "text-max-width" : "200px",
-          "line-style" : "solid",
-          "curve-style" : "bezier",
-          "font-size" : 12,
-          "color" : "hsl(240,80%,20%)",
-          "line-color" : "hsl(240,80%,70%)",
-          "text-opacity" : 1.0,
-          "width" : 1.0,
-          "font-family" : "Tahoma, Arial, sans-serif",
-          "font-weight" : "normal",
-          "opacity" : 1.0,
-          "source-arrow-color" : "hsl(0,0%,100%)",
-          "source-arrow-shape" : "none",
-          "target-arrow-shape" : "vee",
-          "target-arrow-color" : "hsl(240, 55%, 65%)",
-          "target-arrow-fill" : "hollow",
-          "arrow-scale" : 1,
-          "content" : "data(type)"
-      }}, 
-      {
-        selector : "node[supertype = 'Person']",
-        style : {
-          "background-color" : "hsl(80, 80%, 90%)",
-          "shape" : "round-rectangle",
-          "height" : 20.0,
-          "border-width" : 1.0,
-          "border-opacity" : 1.0,
-          "border-color" : "hsl(80, 80%, 50%)",
-          "width" : 80.0,
-          "background-opacity" : 1.0,
-      }}, 
-      {
-        selector : "node[supertype = 'Item']",
-        style : {
-          "background-color" : "hsl(200, 80%, 90%)",
-          "border-width" : 1.0,
-          "height" : 20.0,
-          "shape" : "ellipse",
-          "border-opacity" : 1.0,
-          "border-color" : "hsl(200, 50%, 50%)",
-          "width" : 20.0,
-          "background-opacity" : 1.0,
-      }}, 
-      {
-        selector : "edge[type = 'REALIZATION'],[type = 'PERFORMED_IN'],[type = 'ARRANGEMENT']",
-        style : {
-          "line-color" : "hsl(0, 100%, 90%)",
-          "width" : 3.0,
-       }}, 
-       {
-        selector : "node[supertype = 'Class']",
-        style : {
-          "background-color" : "hsl(280, 60%, 90%)",
-          "shape" : "triangle",
-        }},
-      {
-        selector : "node[type = 'SingPioneer']",
-        style : {
-          "shape" : "round-rectangle",
-          "background-color" : "hsl(0, 80%, 90%)",
-          "height" : 20.0,
-          "width" : 80.0,
-          "border-width" : 1.0,
-          "border-opacity" : 1.0,
-          "border-color" : "hsl(0, 60%, 70%)",
-      }}, 
-      {
-        selector : "node:selected",
-        style : {
-          "background-color" : "hsl(280,100%,70%)"
-      }}, 
-      {
-        selector : "edge:selected",
-        style : {
-          "line-color" : "hsl(280,100%,30%)",
-      }},
-    ],      
-  });
-  // cy = create_cytoscape ()   // To use this line if create_cytoscape() function is created
-
-
-  let layouts = {
-    cola: {
-        name: 'cola',
-        
-        animate: true, // whether to show the layout as it's running
-        refresh: 1, // number of ticks per frame; higher is faster but more jerky
-        maxSimulationTime: 20000, // max length in ms to run the layout
-        ungrabifyWhileSimulating: false, // so you can't drag nodes during layout
-        fit: false, // on every layout reposition of nodes, fit the viewport
-        padding: 30, // padding around the simulation
-        boundingBox: undefined, // constrain layout bounds; { x1, y1, x2, y2 } or { x1, y1, w, h }
-        nodeDimensionsIncludeLabels: false, // whether labels should be included in determining the space used by a node
-
-        // layout event callbacks
-        ready: function(){}, // on layoutready
-        stop: function(){}, // on layoutstop
-
-        // positioning options
-        randomize: false, // use random node positions at beginning of layout
-        avoidOverlap: true, // if true, prevents overlap of node bounding boxes
-        handleDisconnected: true, // if true, avoids disconnected components from overlapping
-        convergenceThreshold: 0.01, // when the alpha value (system energy) falls below this value, the layout stops
-        nodeSpacing: function( node ){ return 20; }, // extra spacing around nodes. orig value = 10
-        flow: undefined, // use DAG/tree flow layout if specified, e.g. { axis: 'y', minSeparation: 30 }
-        alignment: undefined, // relative alignment constraints on nodes, e.g. {vertical: [[{node: node1, offset: 0}, {node: node2, offset: 5}]], horizontal: [[{node: node3}, {node: node4}], [{node: node5}, {node: node6}]]}
-        gapInequalities: undefined, // list of inequality constraints for the gap between the nodes, e.g. [{"axis":"y", "left":node1, "right":node2, "gap":25}]
-        centerGraph: true, // adjusts the node positions initially to center the graph (pass false if you want to start the layout from the current position)
-
-        // different methods of specifying edge length
-        // each can be a constant numerical value or a function like `function( edge ){ return 2; }`
-        edgeLength: 150, // sets edge length directly in simulation. orig value=100
-        edgeSymDiffLength: undefined, // symmetric diff edge length in simulation
-        edgeJaccardLength: undefined, // jaccard edge length in simulation
-
-        // iterations of cola algorithm; uses default values on undefined
-        unconstrIter: undefined, // unconstrained initial layout iterations
-        userConstIter: undefined, // initial layout iterations with user-specified constraints
-        allConstIter: undefined, // initial layout iterations with all constraints including non-overlap
-    },
-    breadthfirst: {      
-        name: 'breadthfirst',
-
-        fit: false, // whether to fit the viewport to the graph
-        directed: true, // whether the tree is directed downwards (or edges can point in any direction if false)
-        padding: 30, // padding on fit
-        circle: false, // put depths in concentric circles if true, put depths top down if false
-        grid: false, // whether to create an even grid into which the DAG is placed (circle:false only)
-        spacingFactor: 1.5, // positive spacing factor, larger => more space between nodes (N.B. n/a if causes overlap). default 1.75
-        boundingBox: undefined, // constrain layout bounds; { x1, y1, x2, y2 } or { x1, y1, w, h }
-        avoidOverlap: true, // prevents node overlap, may overflow boundingBox if not enough space
-        nodeDimensionsIncludeLabels: false, // Excludes the label when calculating node bounding boxes for the layout algorithm
-        roots: undefined, // the roots of the trees
-        maximal: false, // whether to shift nodes down their natural BFS depths in order to avoid upwards edges (DAGS only)
-        animate: false, // whether to transition the node positions
-        animationDuration: 500, // duration of animation in ms if enabled
-        animationEasing: undefined, // easing of animation if enabled,
-        animateFilter: function ( node, i ){ return true; }, // a function that determines whether the node should be animated.  All nodes animated by default on animate enabled.  Non-animated nodes are positioned immediately when the layout starts
-        ready: undefined, // callback on layoutready
-        stop: undefined, // callback on layoutstop
-        transform: function (node, position ){ return position; } // transform a given node position. Useful for changing flow direction in discrete layouts
-
-    },
-    cose: {          
-        name: 'cose',
-
-        ready: function(){},  // Called on `layoutready`
-        stop: function(){},   // Called on `layoutstop`
-
-        // Whether to animate while running the layout
-        // true : Animate continuously as the layout is running
-        // false : Just show the end result
-        // 'end' : Animate with the end result, from the initial positions to the end positions
-        animate: true,
-        animationEasing: undefined,    // Easing of the animation for animate:'end'
-        animationDuration: 10000,  // The duration of the animation for animate:'end'
-
-        // A function that determines whether the node should be animated
-        // All nodes animated by default on animate enabled
-        // Non-animated nodes are positioned immediately when the layout starts
-        animateFilter: function ( node, i ){ return true; },
-
-        // The layout animates only after this many milliseconds for animate:true
-        // (prevents flashing on fast runs)
-        animationThreshold: 250,
-
-        refresh: 20,    // Number of iterations between consecutive screen positions update
-        fit: false,    // Whether to fit the network view after when done
-        padding: 30,    // Padding on fit
-        boundingBox: undefined,    // Constrain layout bounds; { x1, y1, x2, y2 } or { x1, y1, w, h }
-
-        // Excludes the label when calculating node bounding boxes for the layout algorithm
-        nodeDimensionsIncludeLabels: false,
-
-        randomize: false,        // Randomize the initial positions of the nodes (true) or use existing positions (false)
-        componentSpacing: 40,    // Extra spacing between components in non-compound graphs
-        nodeRepulsion: function( node ){ return 2048; },    // Node repulsion (non overlapping) multiplier. Default 2048
-        nodeOverlap: 5,          // Node repulsion (overlapping) multiplier. Default 4
-        idealEdgeLength: function( edge ){ return 40; },    // Ideal edge (non nested) length
-        edgeElasticity: function( edge ){ return 40; },     // Divisor to compute edge forces
-        nestingFactor: 1.2,      // Nesting factor (multiplier) to compute ideal edge length for nested edges
-        gravity: 1,              // Gravity force (constant)
-        numIter: 20000,           // Maximum number of iterations to perform
-        initialTemp: 1000,       // Initial temperature (maximum node displacement)
-        coolingFactor: 0.99,     // Cooling factor (how the temperature is reduced between consecutive iterations
-        minTemp: 1.0             // Lower temperature threshold (below this point the layout will end)
-    }, 
-    concentric: {
-      name: 'concentric',
-
-      fit: false, // whether to fit the viewport to the graph
-      padding: 30, // the padding on fit
-      startAngle: 3 / 2 * Math.PI, // where nodes start in radians
-      sweep: undefined, // how many radians should be between the first and last node (defaults to full circle)
-      clockwise: true, // whether the layout should go clockwise (true) or counterclockwise/anticlockwise (false)
-      equidistant: false, // whether levels have an equal radial distance betwen them, may cause bounding box overflow
-      minNodeSpacing: 10, // min spacing between outside of nodes (used for radius adjustment)
-      boundingBox: undefined, // constrain layout bounds; { x1, y1, x2, y2 } or { x1, y1, w, h }
-      avoidOverlap: true, // prevents node overlap, may overflow boundingBox if not enough space
-      nodeDimensionsIncludeLabels: false, // Excludes the label when calculating node bounding boxes for the layout algorithm
-      height: undefined, // height of layout area (overrides container height)
-      width: undefined, // width of layout area (overrides container width)
-      spacingFactor: undefined, // Applies a multiplicative factor (>0) to expand or compress the overall area that the nodes take up
-      concentric: function( node ){ // returns numeric value for each node, placing higher nodes in levels towards the centre
-        return node.degree();
-      },
-      levelWidth: function( nodes ){ // the variation of concentric values in each level
-        return nodes.maxDegree() / 4;
-      },
-      animate: false, // whether to transition the node positions
-      animationDuration: 500, // duration of animation in ms if enabled
-      animationEasing: undefined, // easing of animation if enabled
-      animateFilter: function ( node, i ){ return true; }, // a function that determines whether the node should be animated.  All nodes animated by default on animate enabled.  Non-animated nodes are positioned immediately when the layout starts
-      ready: undefined, // callback on layoutready
-      stop: undefined, // callback on layoutstop
-      transform: function (node, position ){ return position; } // transform a given node position. Useful for changing flow direction in discrete layouts
-    },
-    fcose: {
-      name: 'fcose',
-    
-      // 'draft', 'default' or 'proof' 
-      // - "draft" only applies spectral layout 
-      // - "default" improves the quality with incremental layout (fast cooling rate)
-      // - "proof" improves the quality with incremental layout (slow cooling rate) 
-      quality: "default",
-      // Use random node positions at beginning of layout
-      // if this is set to false, then quality option must be "proof"
-      randomize: true, 
-      // Whether or not to animate the layout
-      animate: false,   // true
-      // Duration of animation in ms, if enabled
-      animationDuration: 1000, 
-      // Easing of animation, if enabled
-      animationEasing: undefined, 
-      // Fit the viewport to the repositioned nodes
-      fit: true, 
-      // Padding around layout
-      padding: 30,
-      // Whether to include labels in node dimensions. Valid in "proof" quality
-      nodeDimensionsIncludeLabels: false,
-      // Whether or not simple nodes (non-compound nodes) are of uniform dimensions
-      uniformNodeDimensions: false,
-      // Whether to pack disconnected components - cytoscape-layout-utilities extension should be registered and initialized
-      packComponents: true,
-      // Layout step - all, transformed, enforced, cose - for debug purpose only
-      step: "all",
-  
-      /* spectral layout options */
-      // False for random, true for greedy sampling
-      samplingType: true,
-      // Sample size to construct distance matrix
-      sampleSize: 25,
-      // Separation amount between nodes
-      nodeSeparation: 75,
-      // Power iteration tolerance
-      piTol: 0.0000001,
-  
-      /* incremental layout options */
-      // Node repulsion (non overlapping) multiplier
-      nodeRepulsion: node => 15000,   // default 4500
-      // Ideal edge (non nested) length
-      idealEdgeLength: edge => 100,   // 50
-      // Divisor to compute edge forces
-      edgeElasticity: edge => 0.45,
-      // Nesting factor (multiplier) to compute ideal edge length for nested edges
-      nestingFactor: 0.1,
-      // Maximum number of iterations to perform - this is a suggested value and might be adjusted by the algorithm as required
-      numIter: 2500,
-      // For enabling tiling
-      tile: true,  
-      // Represents the amount of the vertical space to put between the zero degree members during the tiling operation(can also be a function)
-      tilingPaddingVertical: 10,
-      // Represents the amount of the horizontal space to put between the zero degree members during the tiling operation(can also be a function)
-      tilingPaddingHorizontal: 10,
-      // Gravity force (constant)
-      gravity: 0.25,     // 0.25
-      // Gravity range (constant) for compounds
-      gravityRangeCompound: 1.5,
-      // Gravity force (constant) for compounds
-      gravityCompound: 1.0,
-      // Gravity range (constant)
-      gravityRange: 3.8, 
-      // Initial cooling factor for incremental layout  
-      initialEnergyOnIncremental: 0.3,
-
-      /* constraint options */
-      // Fix desired nodes to predefined positions
-      // [{nodeId: 'n1', position: {x: 100, y: 200}}, {...}]
-      fixedNodeConstraint: undefined,
-      // Align desired nodes in vertical/horizontal direction
-      // {vertical: [['n1', 'n2'], [...]], horizontal: [['n2', 'n4'], [...]]}
-      alignmentConstraint: undefined,
-      // Place two nodes relatively in vertical/horizontal direction
-      // [{top: 'n1', bottom: 'n2', gap: 100}, {left: 'n3', right: 'n4', gap: 75}, {...}]
-      relativePlacementConstraint: undefined,
-
-      /* layout event callbacks */
-      ready: () => {}, // on layoutready
-      stop: () => {} // on layoutstop    
-    },
-    dagre: {
-      name: 'dagre',
-      
-      // dagre algo options, uses default value on undefined
-      nodeSep: undefined, // the separation between adjacent nodes in the same rank
-      edgeSep: undefined, // the separation between adjacent edges in the same rank
-      rankSep: undefined, // the separation between each rank in the layout
-      rankDir: undefined, // 'TB' for top to bottom flow, 'LR' for left to right,
-      ranker: undefined, // Type of algorithm to assign a rank to each node in the input graph. Possible values: 'network-simplex', 'tight-tree' or 'longest-path'
-      minLen: function( edge ){ return 1; }, // number of ranks to keep between the source and target of the edge
-      edgeWeight: function( edge ){ return 1; }, // higher weight edges are generally made shorter and straighter than lower weight edges
-
-      // general layout options
-      fit: true, // whether to fit to viewport
-      padding: 30, // fit padding
-      spacingFactor: undefined, // Applies a multiplicative factor (>0) to expand or compress the overall area that the nodes take up
-      nodeDimensionsIncludeLabels: false, // whether labels should be included in determining the space used by a node
-      animate: false, // whether to transition the node positions
-      animateFilter: function( node, i ){ return true; }, // whether to animate specific nodes when animation is on; non-animated nodes immediately go to their final positions
-      animationDuration: 500, // duration of animation in ms if enabled
-      animationEasing: undefined, // easing of animation if enabled
-      boundingBox: undefined, // constrain layout bounds; { x1, y1, x2, y2 } or { x1, y1, w, h }
-      transform: function( node, pos ){ return pos; }, // a function that applies a transform to the final node position
-      ready: function(){}, // on layoutready
-      stop: function(){} // on layoutstop
-    },
-    spread: {
-      name: 'spread',
-      
-      animate: true, // Whether to show the layout as it's running
-      ready: undefined, // Callback on layoutready
-      stop: undefined, // Callback on layoutstop
-      fit: true, // Reset viewport to fit default simulationBounds
-      minDist: 20, // Minimum distance between nodes
-      padding: 20, // Padding
-      expandingFactor: -1.0, // If the network does not satisfy the minDist
-      // criterium then it expands the network of this amount
-      // If it is set to -1.0 the amount of expansion is automatically
-      // calculated based on the minDist, the aspect ratio and the
-      // number of nodes
-      prelayout: { name: 'fcose' }, // Layout options for the first phase
-      maxExpandIterations: 4, // Maximum number of expanding iterations
-      boundingBox: undefined, // Constrain layout bounds; { x1, y1, x2, y2 } or { x1, y1, w, h }
-      randomize: false // Uses random initial node positions on true      
-    },
-  }
-
-
-
-  /** Listeners & Actions attached to Cytoscape display & elements **/
-  
-  /* Change graph layout */
-  $('#layout-breadthfirst').addEventListener('click', function(){ cy.nodes('*').unlock(); cy.layout( layouts['breadthfirst'] ).run() });
-  $('#layout-fcose').addEventListener('click', function(){ cy.nodes('*').unlock(); cy.layout( layouts['fcose'] ).run() });
-  $('#layout-concentric').addEventListener('click', function(){ cy.nodes('*').unlock(); cy.layout( layouts['concentric'] ).run() });
-  $('#layout-cola').addEventListener('click', function(){ cy.nodes('*').unlock(); cy.layout( layouts['cola'] ).run() });
-  $('#clear_canvas').addEventListener('click', function(){ 
-     // cy.destroy(); cy = create_cytoscape(); cy_addListener (cy)  // use this approach if next line (remove() function) fails
-     cy.elements().remove()  // original approach. Unfortunately the remove() method sometimes crashes. Probably a bug in cy library
-     nodeTypeRegistry = []    // for storing all the node types 
-     edgeTypeRegistry = []   // for storing all the edge types
-     node_edge_removed = cy.collection()  // for storing nodes and edges removed from the graph
-     $('#panel-filter-help').innerHTML = 
-        `<br/><span style='color: hsl(336, 100%, 30%)'>First, display a graph on the canvas by clicking on buttons on the left panel.<br/>
-        Then a list of node types will display here for selection.</span><br/> <br/>`
-     $('#panel-filter-help').style.visibility = 'visible'
-     $('#sidepanel1').classList.remove("sidepanel-pin","sidepanel-pin2","transition-delay")  // close sidepanel
-     $('#sidepanel-pin2').classList.remove("pin-push")  // reset pin button sidepanel     
-     $('#checkboxes-nodeTypes').innerHTML = '' // remove checkboxes
-     $('#checkboxes-edgeTypes').innerHTML = ''
-     $('#checkbox_submit1').style.visibility = 'hidden'
-     $('#checkbox_submit2').style.visibility = 'hidden'
-     $('#checkbox_clear1').style.visibility = 'hidden' 
-     $('#checkbox_clear2').style.visibility = 'hidden'
-     $('#checkbox_reset1').style.visibility = 'hidden'
-     $('#checkbox_reset2').style.visibility = 'hidden'
-   });
-  $('#zoom-reset').addEventListener('click', function(){ cy.reset();  });
-  $('#zoom-plus').addEventListener('click', function(){ cy.zoom(cy.zoom()+0.1) })
-  $('#zoom-minus').addEventListener('click', function(){ cy.zoom(cy.zoom()-0.1) })
-  $('#layout-spread').addEventListener('click', function(){ cy.nodes('*').unlock(); cy.layout( layouts['spread'] ).run() });
-  // $('#resizeCanvas').addEventListener('click', function(){ resizeCanvas(); cy.reset();  });
-  $('#fullscreen').addEventListener('click', function(){ openFullscreen(); cy.reset();  });
-
-  function openFullscreen() {
-    if ($('#canvasWithMenu').requestFullscreen) {
-      $('#canvasWithMenu').requestFullscreen();
-    } else if ($('#canvasWithMenu').webkitRequestFullscreen) { /* Safari */
-      $('#canvasWithMenu').webkitRequestFullscreen();
-    } else if ($('#canvasWithMenu').msRequestFullscreen) { /* IE11 */
-      $('#canvasWithMenu').msRequestFullscreen();
-    }
-  }
-
-
-
-let cy_addListener = cy => {    // Create function to attach actions to clicks on graph nodes and edges
-
-  /* Respond to clicks on graph nodes & edges */
-  cy.on('tap', 'node', function(event){
-    let node = event.target;      // event.target represents the element that was clicked
-
-    // console.log( 'tapped ' + node.data() );
-    // $('#graph-popup1-content').innerHTML = '<p>' + JSON.stringify(node.data()) + '</p>';
-
-    // If node is a Parent (Cluster) node, then exit function
-    if (node.data()['type'] == 'Cluster') return
-
-    // html text to display in panel. Start with ID2 field
-    let txt = '<p><b>ID: ' + node.data()['id2'] + '</b></p>';  
-    txt = txt.replace(/_/g, ' ')   // replace _ with space
-
-    // temporary storage
-    let comment_text;  
-    let link_text;
-    let date_text;
-    
-    for (x in node.data()) {
-
-      // console.log(x + " : " + node.data()[x])
-      
-       
-        //ID: <a target="_blank" href="?parameter='
-        //txt += records[x]._fields[y].properties.id  + '">'   // hyperlink
-        //txt += records[x]._fields[y].properties.id.replace(/_/g, ' ') + '</a></b><br/>'  // text
-     
-      switch (x) {          // handle dates & URLs
-        case 'id': break;   // skip id field as it is just a node no. We'll display id2
-        case 'id2': break;  // already displayed
-        case 'supertype': break;  // skip this field
-        case 'comment':
-          comment_text = node.data()[x]
-          comment_text = comment_text.replace(/\\n/g, '<br/>')  // replace \\n in the text with <br>
-          comment_text = comment_text.replace(/\\/g, '')  // remove \ <br>
-          comment_text = comment_text.replace(/[‘’“”]/g, '\'')  // replace pretty quotation marks with plain quote
-          txt += '<p><em>comment</em>: ' + comment_text + '</p>'
-          break;
-        case 'birthDate':
-        case 'deathDate':
-        case 'date':
-          date_text = node.data()[x]
-          // date_text = date_text.replace('-1-1$', '')  // remove Jan 1st, and retain just the year.
-          // date_text = date_text.replace('-01-01', '')                  
-          txt += '<p><em>' + x + '</em>: ' + date_text + '</p>'                  
-          break;
-        case 'thumbnailURL':  // display thumbnail image
-              txt += '<p><a target="_blank" href="' + node.data().accessURL[0]  + '">'
-              txt += '<img alt="Photograph" width="200" src="' + node.data().thumbnailURL[0] +'"/></a></p>'
-          break;
-        case 'accessURL':
-          for (link in node.data()[x]) {
-              link_URL = node.data().accessURL[link]
-
-                if (link_URL.search("pdf")>=0) { link_text = 'PDF'   // PDF file
-                } else if (link_URL.search("jpg")>=0) { link_text = 'JPG' 
-                } else if (link_URL.search("youtube")>=0) { link_text = 'YouTube' 
-                } else { link_text = 'Webpage' }
-
-                txt += '<p><a href="' + link_URL +'" target="_blank"><b>' + link_text + '</b></a></p>'
-          }
-          break;
-        default: if ( node.data()[x] !== '' ) { txt += '<p><em>' + x + '</em>: ' + node.data()[x] + '</p>' }
-      }
-    }
-    $('#node-expand').value = node.data()['id2'];  // Add neo4j node ID2 to button value - to pass to listener when clicked
-    $('#node-remove').value = node.data()['id'];   // Add cytoscape node ID to button value
-    $('#graph-popup1-content').innerHTML = txt;
-    $('#graph-popup1').style.display = 'block'; 
-    $('#graph-popup1-menu').style.display = 'block'; 
-
-  })
-
-  cy.on('tap', 'edge', function(event){
-    let edge = event.target;
-    let txt = '<p><b>Relation: ' + edge.data()['supertype'] + '</b></p>';  // html text to display in panel
-    
-    for (x in edge.data()) {
-     
-      switch (x) {          
-        case 'id': break;       // skip 
-        case 'source': break;   // skip 
-        case 'target': break;   // skip 
-        case 'comment':
-          comment_text = edge.data()[x]
-          comment_text = comment_text.replace(/\\n/g, '<br/>')
-          comment_text = comment_text.replace(/\\/g, '')
-          comment_text = comment_text.replace(/[‘’“”]/g, '\'')          
-          txt += '<p><em>comment</em>: ' + comment_text + '</p>'
-          break;
-        default: if ( edge.data()[x] !== '' ) { txt += '<p><em>' + x + '</em>: ' + edge.data()[x] + '</p>' }
-      }
-    }
-    $('#graph-popup1-content').innerHTML = txt;
-    $('#graph-popup1').style.display = 'block'; 
-    $('#graph-popup1-menu').style.display = 'none'; 
-  })
-
-  /* Expand a node with neighboring nodes, when user rightclicks on a node */
-  cy.on('cxttap', 'node', function(event){
-    let node = event.target;      // event.target represents the element that was clicked
-    node.select()
-    
-    // If node is a Parent (Cluster) node, then exit function
-    if (node.data()['type'] == 'Cluster') return    
-
-    cy.nodes('*').unlock()   // unlock all nodes
-    node.lock()              // lock selected node        
-    retrieve(node.data()['id2'],'_', '0','query')
-  }) 
-
-  /* Double-click -- currently same as right-click */
-  cy.on('dbltap', 'node', function(event){
-    let node = event.target      // event.target represents the element that was clicked
-    node.select() 
-
-    // If node is a Parent (Cluster) node, then exit function
-    if (node.data()['type'] == 'Cluster') return
-
-    cy.nodes('*').unlock()   // unlock all nodes
-    node.lock()              // lock selected node        
-    retrieve(node.data()['id2'],'_', '0', 'query')
-  })  
-
-  /* On mousedown, unlock() the node */
-  cy.on('tapstart', 'node', function(event){
-    let node = event.target      // event.target represents the element that was clicked
-    node.unlock()              // lock selected node    
-  })
- 
-}      // End of function to attach actions to clicks on graph nodes and edges
-cy_addListener (cy)   // Run function on current cytoscape graph
- 
- 
-  /* Add listeners for expanding and removing existing Cytoscape nodes */
-  // expand node id stored in button value
-  $('#node-expand').addEventListener('click', function() { 
-    cy.nodes('*').unlock()   // unlock all nodes
-    cy.$id($('#node-expand').name).lock()  // lock selected node    
-    retrieve( $('#node-expand').value, '_', '0', 'query') // $('#node-expand').value contains the node ID used in neo4j database
-  });
-  // remove node stored in button value
-  $('#node-remove').addEventListener('click', function() { 
-    cy.$id($('#node-remove').value).remove()                // $('#node-remove').value contains the node ID used in Cytoscape
-  });  
-
-
-  
-  /*** Code for Side Panel & Toolbox functions ***/
-
-  // global variables
-  let nodeTypeRegistry = []    // for storing all the node types -- to display in toolbox
-  let edgeTypeRegistry = []   // for storing all the edge types
-  let node_edge_removed = cy.collection()  // for storing nodes and edges removed from the graph
-  acc[6].click()  // in the sidepanel, start with the first accordion panel open
-  
-  // No longer used: Event listeners for ! and X to pin or close sidepanel
-  // $("#sidepanel-close").addEventListener('click', function() { $('#sidepanel1').classList.remove("sidepanel-pin") });
-  // $("#sidepanel-pin").addEventListener('click', function() { $('#sidepanel1').classList.add("sidepanel-pin") });
-
-  // pin2 icon is clicked by user
-  $("#sidepanel-pin2").addEventListener('click', function() { 
-    $('#sidepanel1').classList.toggle("sidepanel-pin2") 
-    $('#sidepanel-pin2').classList.toggle("pin-push") 
-  }) 
-
-
-  // Remove pin (but not pin2) when mouseover the panel
-  $("#sidepanel1").addEventListener('mouseenter', function() { $('#sidepanel1').classList.remove("sidepanel-pin","transition-delay") })
-
-  // Add transition delay (i.e. delay closing the panel) when mouseleave (alternatively mouseout)
-  $("#sidepanel1").addEventListener('mouseleave', function() { $('#sidepanel1').classList.add("transition-delay") })
-
- 
-  /* Code for the Toolbox Filter -- to display textboxes in sidepanel */
-  let toolboxFilter_createCheckboxes = (nodeTypes, edgeTypes) => {
-
-    // Create checkboxes for nodeTypes
-    let txt = '<br/><b>Select node types to retain in graph:</b><br/>'  // initialize txt variable
-
-    nodeTypes.sort()
-    txt += nodeTypes.map( item => {
-       return `<input type="checkbox" value="${item}" class="checkNode" checked>${item}<br>`
-    }).join('')   // The output of map() is comma delimited by default. The join method is used to specify a different separator 
-
-    // Display checkboxes
-    document.getElementById('checkboxes-nodeTypes').innerHTML = txt;
-
-    // Create checkboxes for edgeTypes
-    txt = '<b>Select relation types to retain:</b><br/>'  // initialize txt variable
-    edgeTypes.sort()
-    txt += edgeTypes.map( item => {
-       return `<input type="checkbox" value="${item}" class="checkEdge" checked>${item}<br>`
-    }).join('')   
-
-    document.getElementById('checkboxes-edgeTypes').innerHTML = txt;  // Display checkboxes
-    $('#checkbox_submit1').style.visibility = 'visible'    // make submit buttons visible
-    $('#checkbox_submit2').style.visibility = 'visible'    // make submit buttons visible
-    $('#checkbox_clear1').style.visibility = 'visible'   
-    $('#checkbox_clear2').style.visibility = 'visible'   
-    $('#checkbox_reset1').style.visibility = 'visible'   
-    $('#checkbox_reset2').style.visibility = 'visible'    
-    acc[6].click()  // close accordion filter panel
-    acc[6].click()  // re-open accordion panel
-  }
-
-
-  /* Process submit button1 and submit button2 */
-  // Both buttons do the same thing -- apply node filter and edge filter
-
-  let apply_filter = () => {
-
-    // restore nodes and edges previously removed
-    if (!node_edge_removed.empty()) node_edge_removed.restore()
-
-    let node_edge_collection = cy.collection()  // collection of nodes and edges to remove
-    let checkedList = []  // for collecting the checked boxes (nodes or edges)
-    let checkedListValue = []   // to store an array of checked values extracted from checkedList
-
-    // identify checked boxes for edge types 
-    checkedList = document.querySelectorAll('.checkEdge:checked')  // collect the checked boxes for edges
-    for (let i = 0; i < checkedList.length; i++) {
-      checkedListValue.push(checkedList[i].value)  // extract the values from the nodes
-    }
-    let uncheckedEdgeTypes = [] // array of unchecked edge type values
-    
-    // Compare edgeTypeRegistry array with checkedListValue array to identify unchecked edge types
-    edgeTypeRegistry.forEach(item => {
-        if (!checkedListValue.includes(item) && !uncheckedEdgeTypes.includes(item)) { uncheckedEdgeTypes.push(item) }
-    })        
-    // console.log(uncheckedEdgeTypes)
-
-    // Identify edges in graph that match the unchecked values, and remove them
-    let selector = ''   // var for constructing cytoscape selector
-    for (let i = 0; i < uncheckedEdgeTypes.length; i++) {
-      selector = `edge[type = "${uncheckedEdgeTypes[i]}"]`
-      node_edge_collection = node_edge_collection.union(selector)
-    }
-
-    /* Apply node filter */
-    // identify checked boxes for node types 
-    checkedList = document.querySelectorAll('.checkNode:checked')  // collect the checked boxes (nodes)
-    checkedListValue = []   // to store an array of checked values extracted from checkedList
-    for (let i = 0; i < checkedList.length; i++) {
-      checkedListValue.push(checkedList[i].value)  // extract the values from the nodes
-    }
-    let uncheckedNodeTypes = []  // array of unchecked node type values
-        
-    // Compare nodeTypeRegistry with checkedListValue array to identify unchecked values
-    nodeTypeRegistry.forEach(item => {
-        if (!checkedListValue.includes(item) && !uncheckedNodeTypes.includes(item)) { 
-          uncheckedNodeTypes.push(item) 
-        }
-    })
-    // console.log(uncheckedNodeTypes)
-
-    // Select nodes in graph that match the unchecked types, and remove them
-    for (let i = 0; i < uncheckedNodeTypes.length; i++) {    // run through the array
-      selector = `node[type = "${uncheckedNodeTypes[i]}"]`   // select nodes matching each type
-      node_edge_collection = node_edge_collection.union(selector)        // collect nodes into a collection
-    }
-    node_edge_removed = cy.remove( node_edge_collection )                 // remove nodes from graph, and store temporarily
-  }
-
-  // apply filter
-  $('#checkbox_submit1').addEventListener('click', apply_filter)    
-  $('#checkbox_submit2').addEventListener('click', apply_filter)  
-
-  // uncheck all the boxes 
-  $('#checkbox_clear1').addEventListener('click', function(){   
-     document.querySelectorAll('.checkNode').forEach(function(checkbox){checkbox.checked=false}) })    
-  $('#checkbox_clear2').addEventListener('click', function(){
-     document.querySelectorAll('.checkEdge').forEach(function(checkbox){checkbox.checked=false}) })   
-
-  // check all the boxes
-  $('#checkbox_reset1').addEventListener('click', function(){   
-     document.querySelectorAll('.checkNode').forEach(function(checkbox){checkbox.checked=true}) })   
-  $('#checkbox_reset2').addEventListener('click', function(){
-     document.querySelectorAll('.checkEdge').forEach(function(checkbox){checkbox.checked=true}) })   
-
- 
-  });
-})();
-
+  </style>
+</head>
+
+<body>
+
+  <header>
+    <h1>SingPioneers Knowledge Graph Explorer</h1>
+    <p>
+      Explore Singapore pioneers through graph visualization, relationship groups, and interactive intelligent functions.
+      Use the left panel to browse pioneers, special topics, and network-based analysis.
+    </p>
+  </header>
+
+  <div class="page-wrap">
+
+    <div id="main-leftmenu" class="main-leftmenu">
+      <div class="panel-card">
+        <h2 class="sidebar-title">Browse & Explore</h2>
+        <div class="sidebar-subtitle">
+          Select a pioneer, choose relation groups, and run interactive graph queries.
+        </div>
+
+        <div class="function-box">
+          <h4>Intelligent Function 1</h4>
+          <div class="section-note">Explore a selected pioneer under chosen relation groups.</div>
+        </div>
+
+        <div class="function-box">
+          <h4>Intelligent Function 2</h4>
+          <div class="section-note">Identify influential individuals by relation-group connectivity.</div>
+        </div>
+      </div>
+
+      <button class="accordion">Pioneers</button>
+      <div class="panel">
+        <div class="step-title">Step 1. Select pioneer</div>
+        <label for="Pioneer">Pioneer</label>
+        <select id="Pioneer" name="Pioneer">
+          <option value="Chen_Wen_Hsi">Select</option>
+          <option value="Ambo_Sooloh">Ambo Sooloh</option>
+          <option value="Chen_Wen_Hsi">Chen Wen Hsi</option>
+          <option value="Chia_Boon_Leong">Chia Boon Leong</option>
+          <option value="Choo_Seng_Quee">Choo Seng Quee</option>
+          <option value="EW_Barker">EW Barker</option>
+          <option value="Hedwig_Anuar">Hedwig Anuar</option>
+          <option value="John_Chia_Keng_Hock">John Chia Keng Hock</option>
+          <option value="Lee_Kip_Lin">Lee Kip Lin</option>
+          <option value="Lee_Seng_Gee">Lee Seng Gee</option>
+          <option value="Lim_Chong_Pang">Lim Chong Pang</option>
+          <option value="Lim_Tze_Peng">Lim Tze Peng</option>
+          <option value="Lim_Yong_Liang">Lim Yong Liang</option>
+          <option value="LM_Pennefather">LM Pennefather</option>
+          <option value="Loke_Wan_Tho">Loke Wan Tho</option>
+          <option value="P_Govindasamy_Pillai">P Govindasamy Pillai</option>
+          <option value="Paul_Abisheganaden">Paul Abisheganaden</option>
+          <option value="R_Jumabhoy">R Jumabhoy</option>
+          <option value="Tan_Eng_Joo">Tan Eng Joo</option>
+          <option value="Yusof_Ishak">Yusof Ishak</option>
+          <option value="Zubir_Said">Zubir Said</option>
+        </select>
+
+        <div class="step-title">Step 2. Select types of relationship</div>
+        <div class="checkbox-grid">
+          <label><input type="checkbox" id="achievement" value="achievement">achievement</label>
+          <label><input type="checkbox" id="art" value="art">art</label>
+          <label><input type="checkbox" id="award" value="award">award</label>
+          <label><input type="checkbox" id="business" value="business">business</label>
+          <label><input type="checkbox" id="creator_of" value="creator_of">author of</label>
+          <label><input type="checkbox" id="football" value="football">football</label>
+          <label><input type="checkbox" id="interpersonal" value="interpersonal" checked>interpersonal</label>
+          <label><input type="checkbox" id="kinship" value="kinship" checked>kinship</label>
+          <label><input type="checkbox" id="leisure" value="leisure">leisure</label>
+          <label><input type="checkbox" id="movie" value="movie">movie</label>
+          <label><input type="checkbox" id="music" value="music">music</label>
+          <label><input type="checkbox" id="official_of" value="official_of">official of</label>
+          <label><input type="checkbox" id="organization" value="organization">organization</label>
+          <label><input type="checkbox" id="performance" value="performance">performance</label>
+          <label><input type="checkbox" id="philanthropy" value="philanthropy">philanthropy</label>
+          <label><input type="checkbox" id="place" value="place">place</label>
+          <label><input type="checkbox" id="school" value="school">school</label>
+          <label><input type="checkbox" id="sports" value="sports">sports</label>
+          <label><input type="checkbox" id="URL" value="URL">URL</label>
+        </div>
+
+        <div class="step-title">Step 3. Run query</div>
+        <button id="checkbox_submit" class="primary-btn">Submit</button>
+        <div class="section-note">Use this to display the selected pioneer with selected relationship types.</div>
+      </div>
+
+      <button class="accordion">Social Networks</button>
+      <div class="panel">
+        <div class="button-stack">
+          <button id="network_kin">Inter-personal Network</button>
+          <button id="network_school">School Network</button>
+          <button id="network_business">Business Network</button>
+          <button id="network_community">Community Network</button>
+          <button id="network_culture">Culture Network</button>
+          <button id="network_sports">Sports / Leisure Network</button>
+        </div>
+      </div>
+
+      <button class="accordion">Entities</button>
+      <div class="panel">
+        <div class="button-stack">
+          <button id="entity_school">Schools</button>
+          <button id="entity_business">Business Entities</button>
+          <button id="entity_culture">Cultural / Artistic Entities</button>
+          <button id="entity_sports">Sports / Hobbies</button>
+          <button id="entity_community">Community / Social / Political</button>
+          <button id="entity_org">All Organizations</button>
+          <button id="entity_movie">Movies</button>
+          <button id="entity_music">Music</button>
+          <button id="entity_art">Art / Paintings</button>
+          <button id="entity_creative">All Creative Works</button>
+          <button id="entity_event">Events</button>
+          <button id="entity_law">Laws</button>
+          <button id="entity_place">Places</button>
+          <button id="entity_building">Buildings</button>
+          <button id="entity_award">Awards / Recognition</button>
+        </div>
+      </div>
+
+      <button class="accordion">Special Topics</button>
+      <div class="panel">
+        <div class="button-stack">
+          <button id="special_interethnic">Inter-ethnic Relations</button>
+          <button id="special_interethnic_table">Inter-ethnic List in Table</button>
+          <button id="special_multi">Multiple Links Between Persons</button>
+          <button id="special_triad">Triadic Relation Structure</button>
+          <button id="special_triad_table">Triadic List in Table</button>
+        </div>
+      </div>
+
+      <button class="accordion">Relationship Path</button>
+      <div class="panel">
+        <div class="step-title">Entity A</div>
+        <input type="text" id="keywordA" name="keywordA" placeholder="Enter keyword"/>
+        <button id="button-keywordA" class="light-btn" style="margin-top:8px;">Search</button>
+        <select id="entityA" name="entityA"></select>
+
+        <div class="step-title">Entity B</div>
+        <input type="text" id="keywordB" name="keywordB" placeholder="Enter keyword"/>
+        <button id="button-keywordB" class="light-btn" style="margin-top:8px;">Search</button>
+        <select id="entityB" name="entityB"></select>
+
+        <div class="button-stack" style="margin-top:14px;">
+          <button id="button-path" class="primary-btn">Find Path from Entity A to B</button>
+          <button id="button-entityA">Display Just Entity A</button>
+        </div>
+      </div>
+
+      <button class="accordion">Intelligent Functions</button>
+      <div class="panel">
+        <div class="button-stack">
+          <button id="btn-group-network" class="primary-btn">Run Group Network Exploration</button>
+          <button id="btn-top-influential" class="light-btn">Show Influential Individuals</button>
+        </div>
+        <div class="section-note">
+          Use the selected pioneer and relation types above to support the two intelligent functions implemented in the project.
+        </div>
+      </div>
+    </div>
+
+    <div id="main-panel" class="main-panel">
+      <div class="topbar-card">
+        <h2 id="query">Singapore Pioneers – Knowledge Graph & Social Network</h2>
+        <p>
+          Use the menu on the left to display pioneers, social networks, special topics, and intelligent-function results.
+          Click nodes or edges to inspect metadata. Double-click a node to expand nearby relationships.
+        </p>
+      </div>
+
+      <div id="canvasWithMenu">
+        <div id="canvas-menu">
+          <b>Graph layout:</b>
+          <button id="layout-breadthfirst">Tree</button>
+          <button id="layout-concentric">Concentric</button>
+          <button id="layout-fcose">Force-Cose</button>
+          <button id="layout-cola">Force-Cola</button>
+          <button id="layout-spread">Spread</button>
+          <button id="clear_canvas" class="light-btn">Clear</button>
+          <button id="zoom-minus" class="light-btn">-</button>
+          <button id="zoom-reset" class="light-btn">Reset Zoom</button>
+          <button id="zoom-plus" class="light-btn">+</button>
+          <button id="fullscreen" class="primary-btn">Fullscreen</button>
+          <br/>
+          Suggestion: click a node or relationship to display metadata. Double-click a node to expand its neighboring entities.
+        </div>
+
+        <div id="cy"></div>
+
+        <h2 id="query2"></h2>
+        <div id="table1"></div>
+
+        <div id="graph-popup1" class="modal2">
+          <div class="modal2-content">
+            <span id="graph-popup1-close" class="close">&times;</span>
+            <span id="graph-popup1-pin" class="pin" style="font-size:0.8em;">&#128204;</span>
+            <p style="color:#5b2c83; font-weight:500;">
+              <u>Drag</u> this info box to a new location.<br/>
+              <u>Double-click</u> inside the box to close, or click X.<br/>
+              <u>Click</u> on <span id="graph-popup1-pin2" style="font-size:0.9em;">&#128204;</span> to pin and resize the box.
+            </p>
+            <hr/>
+            <div id="graph-popup1-content"></div>
+            <div id="graph-popup1-menu">
+              <button id="node-expand">Expand Node</button>
+              <button id="node-remove">Remove Node</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="sidepanel1" class="sidepanel flex-container">
+    <div style="text-align:center;width:20px;font-weight:bold;font-family:arial,sans-serif;background-color:#d7e8bc;">
+      <br/><br/>&#9874;<br/><br/>T<br/>O<br/>O<br/>L<br/>B<br/>O<br/>X
+    </div>
+
+    <div style="padding:10px;">
+      <span id="sidepanel-pin2" class="pin" style="font-size:0.8em;">&#128204;</span>
+      <small>Hover to open graph filters</small>
+
+      <button class="accordion">Filter</button>
+      <div id="panel-filter" class="panel">
+        <div id="panel-filter-help" style="visibility:hidden; color:#8b1e54;"></div>
+
+        <div id="checkboxes-nodeTypes">
+          <br/>
+          <span style="color:#8b1e54;">
+            First, display a graph on the canvas by clicking buttons on the left panel.
+            Then a list of node types will appear here for filtering.
+          </span>
+          <br/><br/>
+        </div>
+
+        <button id="checkbox_clear1" style="visibility:hidden">&#9744; Uncheck all</button>
+        <button id="checkbox_reset1" style="visibility:hidden">&#9745; Check all</button><br/>
+        <button id="checkbox_submit1" style="visibility:hidden; background-color:#dbe7ff;">Apply filter</button><br/><br/>
+
+        <div id="checkboxes-edgeTypes"></div>
+        <button id="checkbox_clear2" style="visibility:hidden">&#9744; Uncheck all</button>
+        <button id="checkbox_reset2" style="visibility:hidden">&#9745; Check all</button><br/>
+        <button id="checkbox_submit2" style="visibility:hidden; background-color:#dbe7ff;">Apply filter</button><br/><br/>
+      </div>
+
+      <button class="accordion">Other Tools</button>
+      <div class="panel">
+        <p>More tools can be added here later.</p>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
