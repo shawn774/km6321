@@ -378,7 +378,7 @@
     document.getElementById(elementID_query).innerHTML = parameter1.replace(/_/g, ' ')
 
     // API_domain = 'https://km6321.as.r.appspot.com'
-    API_domain = 'http://localhost:8080'  // for testing on laptop
+    API_domain = window.location.origin // for testing on laptop
     
     API_router = 'SPget'
     API_queryID = queryID
